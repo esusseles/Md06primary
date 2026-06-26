@@ -397,7 +397,7 @@ def scrape_ap():
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
 
             # County results are likely in an iframe — search all frames
-            all_frames = page.frames()
+            all_frames = page.frames
             print(f"[AP DEBUG] {len(all_frames)} frames found")
             target_frame = page
             best_row_count = 0
