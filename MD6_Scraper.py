@@ -391,44 +391,43 @@ def scrape_ap():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
             page = browser.new_page()
-            page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
-            # Wait for county table to render
-            page.wait_for_selector("tr", timeout=15000)
+            # networkidle waits for JS to fully render the results widget
+            page.goto(AP_URL, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(3000)
 
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
 
             ap_eevp = {}
             ap_total_votes = {}
+            debug_logged = False
 
-            # Parse <tr> elements directly — first-hit-wins handles Dem vs Republican
             rows = page.query_selector_all("tr")
-            print(f"[AP DEBUG] Found {len(rows)} <tr> rows")
+            print(f"[AP] {len(rows)} table rows found")
+
             for row in rows:
-                try:
-                    text = row.inner_text().strip()
-                except:
+                text = row.inner_text().strip()
+                # Check if this row belongs to any MD-6 county
+                county = None
+                for co in MD6_COUNTIES:
+                    if text.startswith(co):
+                        county = co
+                        break
+                if county is None:
                     continue
-                if not text:
-                    continue
-                # Split on tabs or newlines
-                parts = [p.strip() for p in re.split(r'[\t\n]+', text) if p.strip()]
-                if not parts:
-                    continue
-                # County name is the first token; check with and without " County" suffix
-                county = parts[0].replace(" County", "").strip()
-                if county not in MD6_COUNTIES:
-                    continue
-                # Debug: print every matching row so we can see the structure
-                print(f"[AP DEBUG] {county} row: {parts[:8]}")
+                # first-hit-wins: Democratic rows appear before Republican on AP's page
                 if county in ap_eevp:
-                    continue  # first-hit-wins
-                # Find % and vote total anywhere in the row
+                    continue
+                parts = [p.strip() for p in text.split("\t") if p.strip()]
+                if not debug_logged:
+                    print(f"[AP DEBUG] First county row ({county}): {parts}")
+                    debug_logged = True
+                # Find % and vote total in the row parts
                 pct_found = None
                 total_found = None
-                for p in parts[1:]:
+                for p in parts:
                     if "%" in p and pct_found is None:
                         try:
-                            v = float(p.replace("%", "").replace(",", "").strip())
+                            v = float(p.replace("%", "").strip())
                             if 0 < v <= 100:
                                 pct_found = v
                         except ValueError:
@@ -446,10 +445,10 @@ def scrape_ap():
                     ap_total_votes[county] = total_found
 
             if not ap_eevp:
-                print(f"[AP DEBUG] No county rows found. Dumping first 5 rows:")
-                for row in rows[:5]:
+                print(f"[AP DEBUG] No county rows found in {len(rows)} rows. First 3:")
+                for row in rows[:3]:
                     try:
-                        print(f"[AP DEBUG]   row: {repr(row.inner_text()[:150])}")
+                        print(f"[AP DEBUG]   {repr(row.inner_text()[:150])}")
                     except:
                         pass
 
