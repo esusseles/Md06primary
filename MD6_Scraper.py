@@ -438,10 +438,12 @@ def scrape_ap():
                 i += 1
 
             if not ap_eevp:
-                # Debug: print any lines containing our county names so we can see what AP is showing
-                for l in lines:
+                # Debug: print county lines + surrounding context so we can see the page structure
+                for idx, l in enumerate(lines):
                     if any(co in l for co in MD6_COUNTIES):
-                        print(f"[AP DEBUG] {repr(l[:120])}")
+                        print(f"[AP DEBUG] Line {idx}: {repr(l[:120])}")
+                        for k in range(idx + 1, min(idx + 20, len(lines))):
+                            print(f"[AP DEBUG]   +{k-idx}: {repr(lines[k][:120])}")
 
             browser.close()
 
