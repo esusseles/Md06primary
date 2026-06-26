@@ -389,7 +389,7 @@ def scrape_ap():
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
             page = browser.new_page()
             page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
             # Wait for county table to render
