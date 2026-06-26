@@ -396,7 +396,22 @@ def scrape_ap():
 
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
 
-            rows = page.query_selector_all("tr")
+            # County results are likely in an iframe — search all frames
+            all_frames = page.frames()
+            print(f"[AP DEBUG] {len(all_frames)} frames found")
+            target_frame = page
+            best_row_count = 0
+            for frame in all_frames:
+                try:
+                    frows = frame.query_selector_all("tr")
+                    print(f"[AP DEBUG] Frame {frame.url[:100]} — {len(frows)} rows")
+                    if len(frows) > best_row_count:
+                        best_row_count = len(frows)
+                        target_frame = frame
+                except Exception as fe:
+                    print(f"[AP DEBUG] Frame error: {fe}")
+
+            rows = target_frame.query_selector_all("tr")
             ap_eevp = {}
             ap_total_votes = {}
             debug_logged = False
