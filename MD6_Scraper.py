@@ -443,35 +443,6 @@ def scrape_ap():
                     if any(co in l for co in MD6_COUNTIES):
                         print(f"[AP DEBUG] {repr(l[:120])}")
 
-                pct_found   = None
-                total_found = None
-
-                for p in reversed(parts[1:]):
-                    p_clean = p.replace(",", "").replace("%", "").strip()
-                    if not p_clean:
-                        continue
-                    if "%" in p and pct_found is None:
-                        try:
-                            v = float(p.replace("%", "").strip())
-                            if 0 < v <= 100:
-                                pct_found = v
-                        except ValueError:
-                            pass
-                    elif "%" not in p and total_found is None:
-                        try:
-                            v = int(p.replace(",", "").strip())
-                            if v > 0:
-                                total_found = v
-                        except ValueError:
-                            pass
-                    if pct_found is not None and total_found is not None:
-                        break
-
-                if pct_found is not None:
-                    ap_eevp[county] = pct_found
-                if total_found is not None:
-                    ap_total_votes[county] = total_found
-
             browser.close()
 
             if ap_eevp:
