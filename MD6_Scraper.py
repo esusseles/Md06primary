@@ -30,7 +30,7 @@ AP_URL = "https://apnews.com/projects/elections-2026/maryland-primary-results-us
 
 SBOE_REFRESH_SECS = 5    # SBOE scrape interval
 AP_REFRESH_SECS   = 15   # AP eevp scrape interval (seconds) — needs full browser render, ~15s minimum
-PORT              = 8765
+PORT              = int(os.environ.get("PORT", 8765))
 
 # Per-county pages — give Early / Election Day / Mail-In breakdown by candidate
 # SBOE numbers counties alphabetically starting at 1 (Allegany=1, Anne Arundel=2, etc.)
@@ -577,7 +577,7 @@ def ap_loop():
 if __name__ == "__main__":
     print("=" * 60)
     print("  MD-6 Election Night Scraper")
-    print(f"  Serving live data → http://localhost:{PORT}")
+    print(f"  Serving live data → http://0.0.0.0:{PORT}")
     print(f"  SBOE: refreshing every {SBOE_REFRESH_SECS}s")
     if AP_URL:
         print(f"  AP:   refreshing every {AP_REFRESH_SECS}s  →  {AP_URL}")
@@ -593,6 +593,6 @@ if __name__ == "__main__":
     threading.Thread(target=sboe_loop, daemon=True).start()
     threading.Thread(target=ap_loop,   daemon=True).start()
     try:
-        HTTPServer(("localhost", PORT), Handler).serve_forever()
+        HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
     except KeyboardInterrupt:
         print("\nScraper stopped.")
