@@ -395,61 +395,53 @@ def scrape_ap():
             # Wait for county table to render
             page.wait_for_selector("tr", timeout=15000)
 
-            # Find the Democratic Primary section heading so we only parse Dem rows
-            dem_y = 0
-            try:
-                for sel in ["h2", "h3", "h4", "strong", "b", "div", "span"]:
-                    for el in page.query_selector_all(sel):
-                        try:
-                            if "Democratic Primary" in el.inner_text():
-                                box = el.bounding_box()
-                                if box:
-                                    dem_y = box["y"]
-                                    break
-                        except:
-                            pass
-                    if dem_y > 0:
-                        break
-            except:
-                pass
+            MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
 
-            if dem_y > 0:
-                print(f"[AP] Found 'Democratic Primary' section at y={dem_y:.0f} — filtering to Dem rows only")
-            else:
-                print("[AP] No 'Democratic Primary' heading found — parsing all county rows")
+            # Get full page text and parse line by line — most robust across AP page layouts
+            full_text = page.inner_text("body")
+            lines = [l.strip() for l in full_text.splitlines() if l.strip()]
 
-            rows = page.query_selector_all("tr")
             ap_eevp = {}
             ap_total_votes = {}
-            debug_logged = False
 
-            for row in rows:
-                if dem_y > 0:
-                    try:
-                        row_box = row.bounding_box()
-                        if not row_box or row_box["y"] < dem_y:
-                            continue
-                    except:
-                        pass
+            # Walk lines: when we hit a county name, scan the next ~15 lines for % and vote total
+            # First-hit-wins handles Dem vs Republican (Dem results appear first on AP's page)
+            i = 0
+            while i < len(lines):
+                county = lines[i].replace(" County", "").strip()
+                if county in MD6_COUNTIES and county not in ap_eevp:
+                    pct_found   = None
+                    total_found = None
+                    for j in range(i + 1, min(i + 16, len(lines))):
+                        tok = lines[j].strip()
+                        if "%" in tok and pct_found is None:
+                            try:
+                                v = float(tok.replace("%", "").replace(",", "").strip())
+                                if 0 < v <= 100:
+                                    pct_found = v
+                            except ValueError:
+                                pass
+                        elif "%" not in tok and total_found is None:
+                            try:
+                                v = int(tok.replace(",", "").strip())
+                                if v > 100:
+                                    total_found = v
+                            except ValueError:
+                                pass
+                        if pct_found is not None and total_found is not None:
+                            break
+                    if pct_found is not None:
+                        ap_eevp[county] = pct_found
+                        print(f"[AP] {county}: {pct_found}% ({total_found or '?'} votes)")
+                    if total_found is not None:
+                        ap_total_votes[county] = total_found
+                i += 1
 
-                text = row.inner_text().strip()
-                if "County" not in text:
-                    continue
-                parts = [p.strip() for p in text.split("\t")]
-                if len(parts) < 4:
-                    continue
-
-                county = parts[0].replace(" County", "").strip()
-
-                # First-hit-wins — Democratic rows appear before Republican rows
-                if county in ap_eevp:
-                    continue
-
-                if not debug_logged:
-                    print(f"[AP DEBUG] Raw row for '{county}':")
-                    for i, p in enumerate(parts):
-                        print(f"  parts[{i}] = {repr(p)}")
-                    debug_logged = True
+            if not ap_eevp:
+                # Debug: print any lines containing our county names so we can see what AP is showing
+                for l in lines:
+                    if any(co in l for co in MD6_COUNTIES):
+                        print(f"[AP DEBUG] {repr(l[:120])}")
 
                 pct_found   = None
                 total_found = None
