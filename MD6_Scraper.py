@@ -391,40 +391,41 @@ def scrape_ap():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
             page = browser.new_page()
-            # networkidle waits for JS to fully render the results widget
-            page.goto(AP_URL, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(3000)
+            page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_selector("tr", timeout=15000)
 
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
 
+            rows = page.query_selector_all("tr")
             ap_eevp = {}
             ap_total_votes = {}
             debug_logged = False
 
-            rows = page.query_selector_all("tr")
-            print(f"[AP] {len(rows)} table rows found")
-
             for row in rows:
                 text = row.inner_text().strip()
-                # Check if this row belongs to any MD-6 county
-                county = None
-                for co in MD6_COUNTIES:
-                    if text.startswith(co):
-                        county = co
-                        break
-                if county is None:
+                parts = [p.strip() for p in text.split("\t")]
+                if not parts:
                     continue
-                # first-hit-wins: Democratic rows appear before Republican on AP's page
+
+                county = parts[0].replace(" County", "").strip()
+                if county not in MD6_COUNTIES:
+                    continue
+
+                # First-hit-wins — Democratic rows appear before Republican rows
                 if county in ap_eevp:
                     continue
-                parts = [p.strip() for p in text.split("\t") if p.strip()]
+
                 if not debug_logged:
-                    print(f"[AP DEBUG] First county row ({county}): {parts}")
+                    print(f"[AP DEBUG] First county row ({county}):")
+                    for i, p in enumerate(parts):
+                        print(f"  parts[{i}] = {repr(p)}")
                     debug_logged = True
-                # Find % and vote total in the row parts
+
                 pct_found = None
                 total_found = None
-                for p in parts:
+                for p in reversed(parts[1:]):
+                    if not p.replace(",", "").replace("%", "").strip():
+                        continue
                     if "%" in p and pct_found is None:
                         try:
                             v = float(p.replace("%", "").strip())
@@ -435,20 +436,23 @@ def scrape_ap():
                     elif "%" not in p and total_found is None:
                         try:
                             v = int(p.replace(",", "").strip())
-                            if v > 100:
+                            if v > 0:
                                 total_found = v
                         except ValueError:
                             pass
+                    if pct_found is not None and total_found is not None:
+                        break
+
                 if pct_found is not None:
                     ap_eevp[county] = pct_found
                 if total_found is not None:
                     ap_total_votes[county] = total_found
 
             if not ap_eevp:
-                print(f"[AP DEBUG] No county rows found in {len(rows)} rows. First 3:")
-                for row in rows[:3]:
+                print(f"[AP] No county data found — {len(rows)} rows total")
+                for row in rows[:5]:
                     try:
-                        print(f"[AP DEBUG]   {repr(row.inner_text()[:150])}")
+                        print(f"[AP DEBUG] row: {repr(row.inner_text()[:120])}")
                     except:
                         pass
 
