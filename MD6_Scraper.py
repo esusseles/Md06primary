@@ -397,53 +397,61 @@ def scrape_ap():
 
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
 
-            # Get full page text and parse line by line — most robust across AP page layouts
-            full_text = page.inner_text("body")
-            lines = [l.strip() for l in full_text.splitlines() if l.strip()]
-
             ap_eevp = {}
             ap_total_votes = {}
 
-            # Walk lines: when we hit a county name, scan the next ~15 lines for % and vote total
-            # First-hit-wins handles Dem vs Republican (Dem results appear first on AP's page)
-            i = 0
-            while i < len(lines):
-                county = lines[i].replace(" County", "").strip()
-                if county in MD6_COUNTIES and county not in ap_eevp:
-                    pct_found   = None
-                    total_found = None
-                    for j in range(i + 1, min(i + 16, len(lines))):
-                        tok = lines[j].strip()
-                        if "%" in tok and pct_found is None:
-                            try:
-                                v = float(tok.replace("%", "").replace(",", "").strip())
-                                if 0 < v <= 100:
-                                    pct_found = v
-                            except ValueError:
-                                pass
-                        elif "%" not in tok and total_found is None:
-                            try:
-                                v = int(tok.replace(",", "").strip())
-                                if v > 100:
-                                    total_found = v
-                            except ValueError:
-                                pass
-                        if pct_found is not None and total_found is not None:
-                            break
-                    if pct_found is not None:
-                        ap_eevp[county] = pct_found
-                        print(f"[AP] {county}: {pct_found}% ({total_found or '?'} votes)")
-                    if total_found is not None:
-                        ap_total_votes[county] = total_found
-                i += 1
+            # Parse <tr> elements directly — first-hit-wins handles Dem vs Republican
+            rows = page.query_selector_all("tr")
+            print(f"[AP DEBUG] Found {len(rows)} <tr> rows")
+            for row in rows:
+                try:
+                    text = row.inner_text().strip()
+                except:
+                    continue
+                if not text:
+                    continue
+                # Split on tabs or newlines
+                parts = [p.strip() for p in re.split(r'[\t\n]+', text) if p.strip()]
+                if not parts:
+                    continue
+                # County name is the first token; check with and without " County" suffix
+                county = parts[0].replace(" County", "").strip()
+                if county not in MD6_COUNTIES:
+                    continue
+                # Debug: print every matching row so we can see the structure
+                print(f"[AP DEBUG] {county} row: {parts[:8]}")
+                if county in ap_eevp:
+                    continue  # first-hit-wins
+                # Find % and vote total anywhere in the row
+                pct_found = None
+                total_found = None
+                for p in parts[1:]:
+                    if "%" in p and pct_found is None:
+                        try:
+                            v = float(p.replace("%", "").replace(",", "").strip())
+                            if 0 < v <= 100:
+                                pct_found = v
+                        except ValueError:
+                            pass
+                    elif "%" not in p and total_found is None:
+                        try:
+                            v = int(p.replace(",", "").strip())
+                            if v > 100:
+                                total_found = v
+                        except ValueError:
+                            pass
+                if pct_found is not None:
+                    ap_eevp[county] = pct_found
+                if total_found is not None:
+                    ap_total_votes[county] = total_found
 
             if not ap_eevp:
-                # Debug: print county lines + surrounding context so we can see the page structure
-                for idx, l in enumerate(lines):
-                    if any(co in l for co in MD6_COUNTIES):
-                        print(f"[AP DEBUG] Line {idx}: {repr(l[:120])}")
-                        for k in range(idx + 1, min(idx + 20, len(lines))):
-                            print(f"[AP DEBUG]   +{k-idx}: {repr(lines[k][:120])}")
+                print(f"[AP DEBUG] No county rows found. Dumping first 5 rows:")
+                for row in rows[:5]:
+                    try:
+                        print(f"[AP DEBUG]   row: {repr(row.inner_text()[:150])}")
+                    except:
+                        pass
 
             browser.close()
 
