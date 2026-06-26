@@ -391,85 +391,52 @@ def scrape_ap():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
             page = browser.new_page()
-            page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_selector("tr", timeout=15000)
-
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
-
-            # County results are likely in an iframe — search all frames
-            all_frames = page.frames
-            print(f"[AP DEBUG] {len(all_frames)} frames found")
-            target_frame = page
-            best_row_count = 0
-            for frame in all_frames:
-                try:
-                    frows = frame.query_selector_all("tr")
-                    print(f"[AP DEBUG] Frame {frame.url[:100]} — {len(frows)} rows")
-                    if len(frows) > best_row_count:
-                        best_row_count = len(frows)
-                        target_frame = frame
-                except Exception as fe:
-                    print(f"[AP DEBUG] Frame error: {fe}")
-
-            rows = target_frame.query_selector_all("tr")
             ap_eevp = {}
             ap_total_votes = {}
-            debug_logged = False
 
-            for row in rows:
-                text = row.inner_text().strip()
-                parts = [p.strip() for p in text.split("\t")]
-                if not parts:
+            # Intercept API responses — the results widget fetches JSON from AP's backend
+            captured = []
+            def on_response(response):
+                try:
+                    ct = response.headers.get("content-type", "")
+                    if "json" in ct and any(x in response.url for x in ["elect", "result", "race", "ap.org"]):
+                        captured.append((response.url, response.text()))
+                except:
+                    pass
+
+            page.on("response", on_response)
+            page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(8000)  # let the widget finish its API calls
+
+            print(f"[AP DEBUG] Captured {len(captured)} JSON responses")
+            for url, text in captured:
+                print(f"[AP DEBUG] {url[:120]}")
+                # Search each JSON response for county eevp data
+                try:
+                    data = json.loads(text)
+                except:
                     continue
-
-                county = parts[0].replace(" County", "").strip()
-                if county not in MD6_COUNTIES:
-                    continue
-
-                # First-hit-wins — Democratic rows appear before Republican rows
-                if county in ap_eevp:
-                    continue
-
-                if not debug_logged:
-                    print(f"[AP DEBUG] First county row ({county}):")
-                    for i, p in enumerate(parts):
-                        print(f"  parts[{i}] = {repr(p)}")
-                    debug_logged = True
-
-                pct_found = None
-                total_found = None
-                for p in reversed(parts[1:]):
-                    if not p.replace(",", "").replace("%", "").strip():
-                        continue
-                    if "%" in p and pct_found is None:
-                        try:
-                            v = float(p.replace("%", "").strip())
-                            if 0 < v <= 100:
-                                pct_found = v
-                        except ValueError:
-                            pass
-                    elif "%" not in p and total_found is None:
-                        try:
-                            v = int(p.replace(",", "").strip())
-                            if v > 0:
-                                total_found = v
-                        except ValueError:
-                            pass
-                    if pct_found is not None and total_found is not None:
-                        break
-
-                if pct_found is not None:
-                    ap_eevp[county] = pct_found
-                if total_found is not None:
-                    ap_total_votes[county] = total_found
-
-            if not ap_eevp:
-                print(f"[AP] No county data found — {len(rows)} rows total")
-                for row in rows[:5]:
-                    try:
-                        print(f"[AP DEBUG] row: {repr(row.inner_text()[:120])}")
-                    except:
-                        pass
+                # Walk JSON recursively looking for county-level eevp
+                def walk(obj, depth=0):
+                    if depth > 10:
+                        return
+                    if isinstance(obj, dict):
+                        name = obj.get("name") or obj.get("county") or obj.get("reportingUnitName", "")
+                        county = str(name).replace(" County", "").strip()
+                        eevp = obj.get("eevp") or obj.get("percentReporting") or obj.get("pctReporting")
+                        votes = obj.get("totalVotes") or obj.get("votes")
+                        if county in MD6_COUNTIES and eevp is not None and county not in ap_eevp:
+                            ap_eevp[county] = float(eevp)
+                            if votes:
+                                ap_total_votes[county] = int(votes)
+                            print(f"[AP] {county}: {eevp}% ({votes} votes)")
+                        for v in obj.values():
+                            walk(v, depth + 1)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            walk(item, depth + 1)
+                walk(data)
 
             browser.close()
 
