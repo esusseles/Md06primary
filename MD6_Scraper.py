@@ -421,47 +421,46 @@ def scrape_ap():
                     print(f"[AP DETAIL] {body[:600]}")
 
 
-            # Walk JSON recursively looking for county-level eevp
-            def walk(obj, depth=0):
-                if depth > 12 or not obj:
-                    return
-                if isinstance(obj, dict):
-                    name = (obj.get("reportingUnitName") or obj.get("name") or
-                            obj.get("county") or obj.get("unit") or "")
-                    county = str(name).replace(" County", "").strip()
-                    eevp  = (obj.get("eevp") or obj.get("percentReporting") or
-                             obj.get("pctReporting") or obj.get("pctExpectedVote"))
-                    votes = obj.get("totalVotes") or obj.get("votes") or obj.get("tot")
-                    if county in MD6_COUNTIES and eevp is not None and county not in ap_eevp:
-                        ap_eevp[county] = float(eevp)
-                        if votes:
-                            ap_total_votes[county] = int(votes)
-                        print(f"[AP] {county}: {eevp}% ({votes} votes)")
-                    for v in obj.values():
-                        walk(v, depth + 1)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        walk(item, depth + 1)
+            # Find the Democratic race by checking metadata party field
+            dem_race_id = None
+            for url, body in captured.items():
+                if "/races/MD/" in url and "metadata.json" in url:
+                    try:
+                        meta = json.loads(body)
+                        party = str(meta.get("party") or meta.get("partyID") or meta.get("partyName") or "")
+                        if "Dem" in party or "Democrat" in party:
+                            m = re.search(r'/races/MD/(20260623MD\w+)/', url)
+                            if m:
+                                dem_race_id = m.group(1)
+                                print(f"[AP] Democratic race ID: {dem_race_id}")
+                                break
+                    except:
+                        pass
 
-            for body in captured.values():
-                try:
-                    walk(json.loads(body))
-                except:
-                    pass
+            # Fallback: 20260623MD21841 was the Dem primary in this election
+            target_race = dem_race_id or "20260623MD21841"
 
-            if not ap_eevp and captured:
-                # Print full content of the most promising response so we can see field names
-                for url, body in captured.items():
-                    if "races" in url and "detail" in url:
-                        print(f"[AP DEBUG] detail.json content:")
-                        print(body[:800])
-                        break
-                else:
-                    for url, body in captured.items():
-                        if "races" in url:
-                            print(f"[AP DEBUG] {url}")
-                            print(body[:500])
-                            break
+            # Parse detail.json — structure: {fipsCode: {reportingunitName, eevp, candidates:[{voteCount}]}}
+            for url, body in captured.items():
+                if f"/races/MD/{target_race}/detail.json" in url:
+                    try:
+                        data = json.loads(body)
+                        for fips, unit in data.items():
+                            if not isinstance(unit, dict):
+                                continue
+                            name = unit.get("reportingunitName", "")
+                            county = name.replace(" County", "").strip()
+                            if county not in MD6_COUNTIES or county in ap_eevp:
+                                continue
+                            eevp = unit.get("eevp")
+                            total = sum(c.get("voteCount", 0) for c in unit.get("candidates", []))
+                            if eevp is not None:
+                                ap_eevp[county] = float(eevp)
+                                ap_total_votes[county] = total
+                                print(f"[AP] {county}: {eevp}% ({total} votes)")
+                    except Exception as e:
+                        print(f"[AP] Parse error: {e}")
+                    break
 
             browser.close()
 
