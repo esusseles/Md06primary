@@ -650,12 +650,22 @@ def sboe_loop():
 
 
 def ap_loop():
+    import concurrent.futures
     time.sleep(10)  # let SBOE run first
     while True:
+        print(f"[AP] Starting scrape cycle...")
         try:
-            scrape_ap()
+            # Run scrape_ap() in a thread with a hard 60-second timeout.
+            # page.wait_for_timeout() can hang indefinitely if Playwright stalls —
+            # this ensures the loop always continues even if the browser freezes.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(scrape_ap)
+                try:
+                    future.result(timeout=60)
+                except concurrent.futures.TimeoutError:
+                    print(f"[AP] Scrape timed out after 60s — skipping cycle")
         except Exception as e:
-            print(f"AP loop error: {e}")
+            print(f"[AP] Loop error: {e}")
         time.sleep(AP_REFRESH_SECS)
 
 
