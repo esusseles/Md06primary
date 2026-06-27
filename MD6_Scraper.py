@@ -341,7 +341,6 @@ def scrape_sboe():
         latest["apEevp"] = {}
     status = " | ".join(log)
     print(f"[{result['ts']}] SBOE: {status}")
-    _detect_drops()
 
 
 # ── PER-COUNTY METHOD SCRAPE ─────────────────────────────────────────────────
@@ -644,6 +643,8 @@ def sboe_loop():
         try:
             scrape_sboe()
             scrape_county_methods()
+            # Detect drops AFTER county method data is updated so method attribution is correct
+            _detect_drops()
         except Exception as e:
             print(f"SBOE loop error: {e}")
         time.sleep(SBOE_REFRESH_SECS)
