@@ -395,48 +395,59 @@ def scrape_ap():
             ap_eevp = {}
             ap_total_votes = {}
 
-            # Intercept API responses — the results widget fetches JSON from AP's backend
+            # Intercept API responses from AP elections backend
             captured = []
             def on_response(response):
                 try:
-                    ct = response.headers.get("content-type", "")
-                    if "json" in ct and any(x in response.url for x in ["elect", "result", "race", "ap.org"]):
-                        captured.append((response.url, response.text()))
+                    if "interactives.apelections.org" not in response.url:
+                        return
+                    body = response.text()
+                    captured.append((response.url, body))
                 except:
                     pass
 
             page.on("response", on_response)
             page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(8000)  # let the widget finish its API calls
+            page.wait_for_timeout(8000)
 
-            print(f"[AP DEBUG] Captured {len(captured)} JSON responses")
-            for url, text in captured:
+            print(f"[AP DEBUG] {len(captured)} responses from apelections.org")
+            for url, body in captured:
                 print(f"[AP DEBUG] {url[:120]}")
-                # Search each JSON response for county eevp data
+
+            # Walk JSON recursively looking for county-level eevp
+            def walk(obj, depth=0):
+                if depth > 12 or not obj:
+                    return
+                if isinstance(obj, dict):
+                    # Try various field name patterns AP uses
+                    name = (obj.get("reportingUnitName") or obj.get("name") or
+                            obj.get("county") or obj.get("unit") or "")
+                    county = str(name).replace(" County", "").strip()
+                    eevp  = (obj.get("eevp") or obj.get("percentReporting") or
+                             obj.get("pctReporting") or obj.get("pctExpectedVote"))
+                    votes = obj.get("totalVotes") or obj.get("votes") or obj.get("tot")
+                    if county in MD6_COUNTIES and eevp is not None and county not in ap_eevp:
+                        ap_eevp[county] = float(eevp)
+                        if votes:
+                            ap_total_votes[county] = int(votes)
+                        print(f"[AP] {county}: {eevp}% ({votes} votes)")
+                    for v in obj.values():
+                        walk(v, depth + 1)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        walk(item, depth + 1)
+
+            for url, body in captured:
                 try:
-                    data = json.loads(text)
+                    walk(json.loads(body))
                 except:
-                    continue
-                # Walk JSON recursively looking for county-level eevp
-                def walk(obj, depth=0):
-                    if depth > 10:
-                        return
-                    if isinstance(obj, dict):
-                        name = obj.get("name") or obj.get("county") or obj.get("reportingUnitName", "")
-                        county = str(name).replace(" County", "").strip()
-                        eevp = obj.get("eevp") or obj.get("percentReporting") or obj.get("pctReporting")
-                        votes = obj.get("totalVotes") or obj.get("votes")
-                        if county in MD6_COUNTIES and eevp is not None and county not in ap_eevp:
-                            ap_eevp[county] = float(eevp)
-                            if votes:
-                                ap_total_votes[county] = int(votes)
-                            print(f"[AP] {county}: {eevp}% ({votes} votes)")
-                        for v in obj.values():
-                            walk(v, depth + 1)
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            walk(item, depth + 1)
-                walk(data)
+                    pass
+
+            # If we found data, stop. Otherwise print a sample of what we got.
+            if not ap_eevp and captured:
+                sample_url, sample_body = captured[0]
+                print(f"[AP DEBUG] Sample from {sample_url[:80]}:")
+                print(f"[AP DEBUG] {sample_body[:400]}")
 
             browser.close()
 
