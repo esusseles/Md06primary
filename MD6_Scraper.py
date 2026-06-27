@@ -390,7 +390,7 @@ def scrape_ap():
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
-            page = browser.new_page()
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
             MD6_COUNTIES = {"Allegany", "Frederick", "Garrett", "Montgomery", "Washington"}
             ap_eevp = {}
             ap_total_votes = {}
