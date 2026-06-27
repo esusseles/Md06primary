@@ -58,8 +58,11 @@ except ImportError:
 OPERATOR_PASSWORD = os.environ.get('OPERATOR_PASSWORD', 'md6night')
 
 # ── SHARED STATE (operator pushes, viewers pull) ───────────────────────────────
-STATE_FILE  = 'tracker_state.json'
-CONFIG_FILE = 'tracker_config.json'
+# Persistent data directory — use Railway Volume mounted at /app/data to survive redeployments.
+# If the directory doesn't exist (local dev), files are written to the current directory instead.
+_DATA_DIR   = '/app/data' if os.path.isdir('/app/data') else '.'
+STATE_FILE  = os.path.join(_DATA_DIR, 'tracker_state.json')
+CONFIG_FILE = os.path.join(_DATA_DIR, 'tracker_config.json')
 stored_state = None
 stored_config = {}   # persisted operator config (counties, priors, candidates)
 
@@ -101,18 +104,18 @@ _load_stored_state()
 # ── VOTE DROP DETECTION ───────────────────────────────────────────────────────
 
 _prev_county        = {}   # county_name -> {cand_name: votes}
-_prev_county_method = {}   # county_name -> {early, ed, mail}
+_prev_county_method = {}   # county_name -> {early, ed, mail, provisional}
 
 APRIL_NAME    = "April McClain Delaney"
 TRONE_NAME    = "David J. Trone"
-METHOD_LABELS = {'mail': 'Mail-In', 'early': 'Early Vote', 'ed': 'Election Day'}
+METHOD_LABELS = {'mail': 'Mail-In', 'early': 'Early Vote', 'ed': 'Election Day', 'provisional': 'Provisional'}
 
 def _detect_drops():
     """Diff county results vs previous scrape; append new vote drops to stored_state voteFeed."""
     global _prev_county, _prev_county_method, stored_state
 
     new_county  = latest.get('county', {})
-    new_methods = {k: {m: v.get(m, 0) for m in ('early','ed','mail')}
+    new_methods = {k: {m: v.get(m, 0) for m in ('early','ed','mail','provisional')}
                    for k, v in latest.get('countyMethod', {}).items()}
 
     # First run — capture baseline, don't emit drops
@@ -140,7 +143,7 @@ def _detect_drops():
         old_m = _prev_county_method.get(county, {})
         new_m = new_methods.get(county, {})
         if old_m and new_m:
-            best = max(('mail','early','ed'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
+            best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
             if new_m.get(best, 0) - old_m.get(best, 0) > 0:
                 method_key = best
 
