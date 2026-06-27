@@ -395,31 +395,50 @@ def scrape_ap():
             ap_eevp = {}
             ap_total_votes = {}
 
-            # Intercept API responses from AP elections backend
-            captured = []
+            # Intercept all apelections.org JSON responses
+            captured = {}  # url -> body
             def on_response(response):
                 try:
-                    if "interactives.apelections.org" not in response.url:
+                    if "apelections.org" not in response.url:
                         return
-                    body = response.text()
-                    captured.append((response.url, body))
+                    captured[response.url] = response.text()
                 except:
                     pass
 
             page.on("response", on_response)
             page.goto(AP_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(8000)
+            # Scroll down to trigger lazy-load of results widget
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            page.wait_for_timeout(5000)
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(5000)
 
-            print(f"[AP DEBUG] {len(captured)} responses from apelections.org")
-            for url, body in captured:
-                print(f"[AP DEBUG] {url[:120]}")
+            print(f"[AP DEBUG] {len(captured)} apelections.org responses captured")
+            for url in captured:
+                print(f"[AP DEBUG] {url}")
+
+            # Also try fetching results files directly via the browser's fetch
+            # (uses browser's auth context / cookies)
+            RACE_BASE = "https://interactives.apelections.org/election-results/data-live/2026-06-23/results/races/MD/20260623MD21761/"
+            for fname in ["results.json", "race.json", "reporting-units.json", "counties.json"]:
+                if RACE_BASE + fname not in captured:
+                    try:
+                        body = page.evaluate(f"""async () => {{
+                            const r = await fetch('{RACE_BASE}{fname}');
+                            if (r.ok) return await r.text();
+                            return null;
+                        }}""")
+                        if body:
+                            print(f"[AP DEBUG] Fetched {fname} directly")
+                            captured[RACE_BASE + fname] = body
+                    except:
+                        pass
 
             # Walk JSON recursively looking for county-level eevp
             def walk(obj, depth=0):
                 if depth > 12 or not obj:
                     return
                 if isinstance(obj, dict):
-                    # Try various field name patterns AP uses
                     name = (obj.get("reportingUnitName") or obj.get("name") or
                             obj.get("county") or obj.get("unit") or "")
                     county = str(name).replace(" County", "").strip()
@@ -437,17 +456,18 @@ def scrape_ap():
                     for item in obj:
                         walk(item, depth + 1)
 
-            for url, body in captured:
+            for body in captured.values():
                 try:
                     walk(json.loads(body))
                 except:
                     pass
 
-            # If we found data, stop. Otherwise print a sample of what we got.
             if not ap_eevp and captured:
-                sample_url, sample_body = captured[0]
-                print(f"[AP DEBUG] Sample from {sample_url[:80]}:")
-                print(f"[AP DEBUG] {sample_body[:400]}")
+                # Print a snippet from the most promising response
+                for url, body in captured.items():
+                    if "races" in url or "results" in url:
+                        print(f"[AP DEBUG] Sample: {body[:300]}")
+                        break
 
             browser.close()
 
