@@ -413,12 +413,6 @@ def scrape_ap():
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             page.wait_for_timeout(5000)
 
-            print(f"[AP DEBUG] {len(captured)} apelections.org responses captured")
-            # Always print detail.json content so we can see AP's field names
-            for url, body in captured.items():
-                if "/races/" in url and "detail.json" in url:
-                    print(f"[AP DETAIL] {url}")
-                    print(f"[AP DETAIL] {body[:600]}")
 
 
             # Find the Democratic race by checking metadata party field
