@@ -414,30 +414,12 @@ def scrape_ap():
             page.wait_for_timeout(5000)
 
             print(f"[AP DEBUG] {len(captured)} apelections.org responses captured")
-            for url in captured:
-                print(f"[AP DEBUG] {url}")
+            # Always print detail.json content so we can see AP's field names
+            for url, body in captured.items():
+                if "/races/" in url and "detail.json" in url:
+                    print(f"[AP DETAIL] {url}")
+                    print(f"[AP DETAIL] {body[:600]}")
 
-            # Also try fetching results files directly via the browser's fetch
-            # (uses browser's auth context / cookies)
-            # Derive race ID dynamically from captured URLs
-            import re as _re
-            race_ids = _re.findall(r'/races/MD/(20260623MD\w+)/', ' '.join(captured.keys()))
-            race_id = race_ids[0] if race_ids else "20260623MD21841"
-            RACE_BASE = f"https://interactives.apelections.org/election-results/data-live/2026-06-23/results/races/MD/{race_id}/"
-            print(f"[AP DEBUG] Using race ID: {race_id}")
-            for fname in ["detail.json", "results.json", "race.json", "reporting-units.json", "counties.json"]:
-                if RACE_BASE + fname not in captured:
-                    try:
-                        body = page.evaluate(f"""async () => {{
-                            const r = await fetch('{RACE_BASE}{fname}');
-                            if (r.ok) return await r.text();
-                            return null;
-                        }}""")
-                        if body:
-                            print(f"[AP DEBUG] Fetched {fname} directly")
-                            captured[RACE_BASE + fname] = body
-                    except:
-                        pass
 
             # Walk JSON recursively looking for county-level eevp
             def walk(obj, depth=0):
