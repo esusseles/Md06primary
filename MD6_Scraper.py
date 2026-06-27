@@ -58,8 +58,10 @@ except ImportError:
 OPERATOR_PASSWORD = os.environ.get('OPERATOR_PASSWORD', 'md6night')
 
 # ── SHARED STATE (operator pushes, viewers pull) ───────────────────────────────
-STATE_FILE = 'tracker_state.json'
+STATE_FILE  = 'tracker_state.json'
+CONFIG_FILE = 'tracker_config.json'
 stored_state = None
+stored_config = {}   # persisted operator config (counties, priors, candidates)
 
 def _load_stored_state():
     global stored_state
@@ -76,6 +78,23 @@ def _save_stored_state():
             json.dump(stored_state, f)
     except Exception as e:
         print(f"[State] Failed to persist state: {e}")
+
+def _load_stored_config():
+    global stored_config
+    try:
+        with open(CONFIG_FILE) as f:
+            stored_config = json.load(f)
+        print(f"[Config] Loaded saved config from {CONFIG_FILE}")
+        latest["config"] = stored_config
+    except:
+        stored_config = {}
+
+def _save_stored_config():
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(stored_config, f)
+    except Exception as e:
+        print(f"[Config] Failed to persist config: {e}")
 
 _load_stored_state()
 
@@ -159,6 +178,8 @@ latest = {
     "refreshSecs": SBOE_REFRESH_SECS,   # tracker polls at this interval
     "config": {},        # operator's tracker config (candidates, counties, priors) — set via POST /config
 }
+
+_load_stored_config()  # restore persisted config into latest["config"] on startup
 
 
 # ── SBOE HELPERS ─────────────────────────────────────────────────────────────
@@ -558,6 +579,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/state':
             # Shared tracker state — viewers poll this
             self._send_json(json.dumps(stored_state or {}).encode())
+        elif self.path == '/verify':
+            # Password check — returns {"ok":true} or {"ok":false}
+            pw = self.headers.get('X-Operator-Password', '')
+            ok = pw == OPERATOR_PASSWORD
+            self._send_json(json.dumps({"ok": ok}).encode())
         elif self.path == '/health':
             self._send_json(b'{"ok":true}')
         else:
@@ -588,9 +614,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(b'{"error":"bad json"}', 400)
 
         elif self.path == '/config':
-            # Tracker config (candidates, priors) — silent, no log
+            # Tracker config (candidates, priors) — persist to disk so it survives restarts
             try:
-                latest["config"] = json.loads(body)
+                global stored_config
+                stored_config = json.loads(body)
+                latest["config"] = stored_config
+                _save_stored_config()
                 self._send_json(b'{"ok":true}')
             except:
                 self.send_response(400); self.end_headers()
