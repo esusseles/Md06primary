@@ -419,8 +419,13 @@ def scrape_ap():
 
             # Also try fetching results files directly via the browser's fetch
             # (uses browser's auth context / cookies)
-            RACE_BASE = "https://interactives.apelections.org/election-results/data-live/2026-06-23/results/races/MD/20260623MD21761/"
-            for fname in ["results.json", "race.json", "reporting-units.json", "counties.json"]:
+            # Derive race ID dynamically from captured URLs
+            import re as _re
+            race_ids = _re.findall(r'/races/MD/(20260623MD\w+)/', ' '.join(captured.keys()))
+            race_id = race_ids[0] if race_ids else "20260623MD21841"
+            RACE_BASE = f"https://interactives.apelections.org/election-results/data-live/2026-06-23/results/races/MD/{race_id}/"
+            print(f"[AP DEBUG] Using race ID: {race_id}")
+            for fname in ["detail.json", "results.json", "race.json", "reporting-units.json", "counties.json"]:
                 if RACE_BASE + fname not in captured:
                     try:
                         body = page.evaluate(f"""async () => {{
@@ -463,11 +468,18 @@ def scrape_ap():
                     pass
 
             if not ap_eevp and captured:
-                # Print a snippet from the most promising response
+                # Print full content of the most promising response so we can see field names
                 for url, body in captured.items():
-                    if "races" in url or "results" in url:
-                        print(f"[AP DEBUG] Sample: {body[:300]}")
+                    if "races" in url and "detail" in url:
+                        print(f"[AP DEBUG] detail.json content:")
+                        print(body[:800])
                         break
+                else:
+                    for url, body in captured.items():
+                        if "races" in url:
+                            print(f"[AP DEBUG] {url}")
+                            print(body[:500])
+                            break
 
             browser.close()
 
