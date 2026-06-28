@@ -105,14 +105,16 @@ _load_stored_state()
 
 _prev_county        = {}   # county_name -> {cand_name: votes}
 _prev_county_method = {}   # county_name -> {early, ed, mail, provisional}
+_pending_drops      = {}   # county_name -> {entry, snap_cands, snap_methods, cycles_waited}
 
 APRIL_NAME    = "April McClain Delaney"
 TRONE_NAME    = "David J. Trone"
 METHOD_LABELS = {'mail': 'Mail-In', 'early': 'Early Vote', 'ed': 'Election Day', 'provisional': 'Provisional'}
+MAX_PENDING_CYCLES = 3   # wait up to 3 cycles for method data to catch up before emitting anyway
 
 def _detect_drops():
     """Diff county results vs previous scrape; append new vote drops to stored_state voteFeed."""
-    global _prev_county, _prev_county_method, stored_state
+    global _prev_county, _prev_county_method, _pending_drops, stored_state
 
     new_county  = latest.get('county', {})
     new_methods = {k: {m: v.get(m, 0) for m in ('early','ed','mail','provisional')}
@@ -127,37 +129,93 @@ def _detect_drops():
     ts   = time.strftime("%-I:%M %p")
     feed = list((stored_state or {}).get('voteFeed', []))
 
-    for county, cands in new_county.items():
-        old_cands = _prev_county.get(county, {})
-        delta     = sum(cands.values()) - sum(old_cands.values())
-        if delta <= 0:
-            continue
-
-        cand_deltas  = {c: cands[c] - old_cands.get(c, 0) for c in cands
-                        if cands[c] - old_cands.get(c, 0) > 0}
-        april_delta  = cand_deltas.get(APRIL_NAME, 0)
-        trone_delta  = cand_deltas.get(TRONE_NAME,  0)
-        margin_delta = april_delta - trone_delta
-
-        method_key = None
-        old_m = _prev_county_method.get(county, {})
+    # ── Try to resolve pending entries (method data may have caught up) ──
+    resolved = []
+    for county, pending in list(_pending_drops.items()):
+        old_m = pending['snap_methods']
         new_m = new_methods.get(county, {})
+        method_key = None
         if old_m and new_m:
             best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
             if new_m.get(best, 0) - old_m.get(best, 0) > 0:
                 method_key = best
 
-        feed = [{
+        pending['cycles_waited'] += 1
+        if method_key or pending['cycles_waited'] >= MAX_PENDING_CYCLES:
+            # Emit with best available method (may still be None if data never updated)
+            entry = pending['entry']
+            entry['methodKey']   = method_key
+            entry['methodLabel'] = METHOD_LABELS.get(method_key) if method_key else None
+            feed = [entry] + feed
+            resolved.append(county)
+            print(f"[Drop] {county} +{entry['delta']:,} ({method_key or '?'}) — "
+                  f"April +{entry['candDeltas'].get(APRIL_NAME,0)}, "
+                  f"Trone +{entry['candDeltas'].get(TRONE_NAME,0)}"
+                  + ('' if method_key else ' [method unknown]'))
+            # Advance method snapshot now that we've published
+            if new_m:
+                _prev_county_method[county] = dict(new_m)
+
+    for county in resolved:
+        del _pending_drops[county]
+
+    # ── Check for new vote deltas ──
+    for county, cands in new_county.items():
+        if county in _pending_drops:
+            continue  # already waiting on a pending drop for this county
+
+        old_cands = _prev_county.get(county, {})
+        delta     = sum(cands.values()) - sum(old_cands.values())
+        if delta <= 0:
+            # No vote change — advance method snapshot so future deltas are relative
+            if new_methods.get(county):
+                _prev_county_method[county] = dict(new_methods[county])
+            continue
+
+        cand_deltas  = {c: cands[c] - old_cands.get(c, 0) for c in cands
+                        if cands[c] - old_cands.get(c, 0) > 0}
+        april_delta  = cand_deltas.get(APRIL_NAME, 0)
+        trone_delta  = cand_deltas.get(TRONE_NAME, 0)
+        margin_delta = april_delta - trone_delta
+
+        # Try to resolve method now
+        old_m = _prev_county_method.get(county, {})
+        new_m = new_methods.get(county, {})
+        method_key = None
+        if old_m and new_m:
+            best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
+            if new_m.get(best, 0) - old_m.get(best, 0) > 0:
+                method_key = best
+
+        entry = {
             'ts':          ts,
             'county':      county,
             'delta':       delta,
-            'candDeltas':  cand_deltas,   # keyed by candidate full name
+            'candDeltas':  cand_deltas,
             'marginDelta': margin_delta,
             'methodKey':   method_key,
             'methodLabel': METHOD_LABELS.get(method_key) if method_key else None,
-        }] + feed
-        print(f"[Drop] {county} +{delta:,} ({method_key or '?'}) — "
-              f"April +{april_delta}, Trone +{trone_delta}")
+        }
+
+        if method_key:
+            # Method resolved immediately — emit now
+            feed = [entry] + feed
+            print(f"[Drop] {county} +{delta:,} ({method_key}) — "
+                  f"April +{april_delta}, Trone +{trone_delta}")
+            if new_m:
+                _prev_county_method[county] = dict(new_m)
+        else:
+            # Method unclear — hold for up to MAX_PENDING_CYCLES cycles
+            print(f"[Drop] {county} +{delta:,} (pending method) — "
+                  f"April +{april_delta}, Trone +{trone_delta}")
+            _pending_drops[county] = {
+                'entry':         entry,
+                'snap_methods':  dict(old_m) if old_m else {},
+                'cycles_waited': 0,
+            }
+
+        # Always advance vote snapshot so we don't re-detect the same delta
+        _prev_county[county] = dict(cands)
 
     if stored_state is None:
         stored_state = {}
@@ -165,7 +223,7 @@ def _detect_drops():
     _save_stored_state()
 
     _prev_county        = {k: dict(v) for k, v in new_county.items()}
-    _prev_county_method = dict(new_methods)
+    # Note: _prev_county_method is updated per-county above; don't overwrite here
 
 # ─────────────────────────────────────────────────────────────────────────────
 
