@@ -646,6 +646,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(json.dumps({"ok": ok}).encode())
         elif self.path == '/health':
             self._send_json(b'{"ok":true}')
+        elif self.path == '/debug':
+            import shutil
+            info = {}
+            for f in [STATE_FILE, CONFIG_FILE]:
+                try:
+                    info[f] = f'{round(os.path.getsize(f)/1024, 1)} KB'
+                except:
+                    info[f] = 'missing'
+            try:
+                total, used, free = shutil.disk_usage(_DATA_DIR)
+                info['disk_total_mb'] = round(total/1024/1024, 1)
+                info['disk_used_mb']  = round(used/1024/1024, 1)
+                info['disk_free_mb']  = round(free/1024/1024, 1)
+            except:
+                pass
+            self._send_json(json.dumps(info, indent=2).encode())
         else:
             # Default: live scraper data
             self._send_json(json.dumps(latest).encode())
