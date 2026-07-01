@@ -67,11 +67,15 @@ stored_state = None
 stored_config = {}   # persisted operator config (counties, priors, candidates)
 
 def _load_stored_state():
-    global stored_state
+    global stored_state, _prev_county_method
     try:
         with open(STATE_FILE) as f:
             stored_state = json.load(f)
         print(f"[State] Loaded saved tracker state from {STATE_FILE}")
+        # Restore method baselines so scraper restarts don't lose drop detection context
+        if stored_state and '_prevCountyMethod' in stored_state:
+            _prev_county_method = stored_state['_prevCountyMethod']
+            print(f"[State] Restored method baselines for {len(_prev_county_method)} counties")
     except:
         stored_state = None
 
@@ -132,10 +136,11 @@ def _detect_drops():
     # ── Try to resolve pending entries (method data may have caught up) ──
     resolved = []
     for county, pending in list(_pending_drops.items()):
-        old_m = pending['snap_methods']
+        # Use snap_methods as baseline; if empty (e.g. post-restart), fall back to current _prev_county_method
+        old_m = pending['snap_methods'] or _prev_county_method.get(county, {})
         new_m = new_methods.get(county, {})
         method_key = None
-        if old_m and new_m:
+        if new_m:
             best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
             if new_m.get(best, 0) - old_m.get(best, 0) > 0:
                 method_key = best
@@ -220,6 +225,7 @@ def _detect_drops():
     if stored_state is None:
         stored_state = {}
     stored_state['voteFeed'] = feed[:50]
+    stored_state['_prevCountyMethod'] = _prev_county_method  # persist so restarts don't lose baselines
     _save_stored_state()
 
     _prev_county        = {k: dict(v) for k, v in new_county.items()}
