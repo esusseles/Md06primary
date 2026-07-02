@@ -114,7 +114,7 @@ _pending_drops      = {}   # county_name -> {entry, snap_cands, snap_methods, cy
 APRIL_NAME    = "April McClain Delaney"
 TRONE_NAME    = "David J. Trone"
 METHOD_LABELS = {'mail': 'Mail-In', 'early': 'Early Vote', 'ed': 'Election Day', 'provisional': 'Provisional'}
-MAX_PENDING_CYCLES = 3   # wait up to 3 cycles for method data to catch up before emitting anyway
+MAX_PENDING_CYCLES = 6   # wait up to 6 cycles (~30s at 5s interval) for method data to catch up
 
 def _detect_drops():
     """Diff county results vs previous scrape; append new vote drops to stored_state voteFeed."""
@@ -252,7 +252,13 @@ _load_stored_config()  # restore persisted config into latest["config"] on start
 # ── SBOE HELPERS ─────────────────────────────────────────────────────────────
 
 def fetch_url(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    # Append timestamp to bust any CDN/server-side cache — critical when running on hosted servers
+    bust = f"?_={int(time.time())}" if '?' not in url else f"&_={int(time.time())}"
+    req = urllib.request.Request(url + bust, headers={
+        "User-Agent":      "Mozilla/5.0",
+        "Cache-Control":   "no-cache, no-store",
+        "Pragma":          "no-cache",
+    })
     with urllib.request.urlopen(req, timeout=20) as r:
         return r.read().decode("utf-8", errors="replace")
 
