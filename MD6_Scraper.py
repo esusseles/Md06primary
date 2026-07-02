@@ -667,6 +667,9 @@ class Handler(BaseHTTPRequestHandler):
                 info['disk_free_mb']  = round(free/1024/1024, 1)
             except:
                 pass
+            info['countyMethod'] = latest.get('countyMethod', {})
+            info['prevCountyMethod'] = _prev_county_method
+            info['pendingDrops'] = list(_pending_drops.keys())
             self._send_json(json.dumps(info, indent=2).encode())
         else:
             # Default: live scraper data
