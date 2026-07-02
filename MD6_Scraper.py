@@ -12,7 +12,18 @@ HOW TO USE:
   4. UPDATE THE URLS BELOW on election night with the 2026 live links.
 """
 
-import urllib.request, json, time, threading, re, sys, os
+import urllib.request, json, time, threading, re, sys, os, datetime
+try:
+    from zoneinfo import ZoneInfo
+    _EASTERN = ZoneInfo("America/New_York")
+except ImportError:
+    _EASTERN = None  # Python < 3.9 fallback
+
+def _now_eastern(fmt):
+    if _EASTERN:
+        return datetime.datetime.now(_EASTERN).strftime(fmt)
+    # Fallback: subtract 4 hours (EDT offset) — not DST-aware but close enough
+    return (datetime.datetime.utcnow() - datetime.timedelta(hours=4)).strftime(fmt)
 
 # ── UPDATE THESE URLS ON ELECTION NIGHT ──────────────────────────────────────
 METHOD_URL = (
@@ -130,7 +141,7 @@ def _detect_drops():
         _prev_county_method = dict(new_methods)
         return
 
-    ts   = time.strftime("%-I:%M %p")
+    ts   = _now_eastern("%-I:%M %p ET")
     feed = list((stored_state or {}).get('voteFeed', []))
 
     # ── Try to resolve pending entries (method data may have caught up) ──
@@ -297,7 +308,7 @@ def scrape_sboe():
     result = {
         "method": {},
         "county": {},
-        "ts": time.strftime("%I:%M:%S %p"),
+        "ts": _now_eastern("%I:%M:%S %p"),
         "log": log,
         "refreshSecs": SBOE_REFRESH_SECS,
     }
@@ -534,7 +545,7 @@ def scrape_county_methods():
     if county_method:
         latest['countyMethod'] = county_method
 
-    ts = time.strftime("%I:%M:%S %p")
+    ts = _now_eastern("%I:%M:%S %p")
     status = ' | '.join(log)
     print(f"[{ts}] CountyMethod: {status}")
 
@@ -623,7 +634,7 @@ def scrape_ap():
             if ap_eevp:
                 latest["apEevp"] = ap_eevp
                 latest["apTotalVotes"] = ap_total_votes
-                latest["apTs"] = time.strftime("%I:%M:%S %p")
+                latest["apTs"] = _now_eastern("%I:%M:%S %p")
                 counties = ", ".join(f"{k} {v}% ({ap_total_votes.get(k,'?')} votes)" for k, v in ap_eevp.items())
                 print(f"[{latest['apTs']}] AP: {len(ap_eevp)} counties → {counties}")
             else:
