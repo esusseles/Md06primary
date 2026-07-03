@@ -689,6 +689,7 @@ class Handler(BaseHTTPRequestHandler):
             except:
                 pass
             info['countyMethod'] = latest.get('countyMethod', {})
+            info['districtMethod'] = latest.get('method', {})
             info['prevCountyMethod'] = _prev_county_method
             info['pendingDrops'] = list(_pending_drops.keys())
             self._send_json(json.dumps(info, indent=2).encode())
