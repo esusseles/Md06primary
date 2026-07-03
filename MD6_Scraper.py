@@ -329,6 +329,7 @@ def scrape_sboe():
                 mail_i  = next(i for i, h in enumerate(headers) if "mail"          in h.lower())
             except StopIteration:
                 continue
+            prov_i = next((i for i, h in enumerate(headers) if "prov" in h.lower()), None)
             full_text = " ".join(c for row in table for c in row).lower()
             if "democratic" not in full_text:
                 continue
@@ -340,19 +341,20 @@ def scrape_sboe():
                 if not name or "totals" in name.lower():
                     continue
                 method_data[name] = {
-                    "early": pv(row[early_i]),
-                    "ed":    pv(row[ed_i]),
-                    "mail":  pv(row[mail_i]),
+                    "early":       pv(row[early_i]),
+                    "ed":          pv(row[ed_i]),
+                    "mail":        pv(row[mail_i]),
+                    "provisional": pv(row[prov_i]) if prov_i is not None and prov_i < len(row) else 0,
                 }
 
             if method_data:
-                early_tot = sum(v.get("early", 0) for v in method_data.values())
-                ed_tot    = sum(v.get("ed",    0) for v in method_data.values())
-                mail_tot  = sum(v.get("mail",  0) for v in method_data.values())
+                early_tot = sum(v.get("early",       0) for v in method_data.values())
+                ed_tot    = sum(v.get("ed",           0) for v in method_data.values())
+                mail_tot  = sum(v.get("mail",         0) for v in method_data.values())
+                prov_tot  = sum(v.get("provisional",  0) for v in method_data.values())
                 log.append(
                     f"✅ Vote method: {len(method_data)} candidates — "
-                    f"Early: {early_tot:,} | Election Day: {ed_tot:,} | Mail: {mail_tot:,} | "
-                    f"Total: {early_tot+ed_tot+mail_tot:,}"
+                    f"Early: {early_tot:,} | ED: {ed_tot:,} | Mail: {mail_tot:,} | Prov: {prov_tot:,}"
                 )
                 break
 
@@ -466,13 +468,14 @@ def scrape_county_methods():
                     continue
                 headers = table[0]
 
-                # Need Early Voting, Election Day, Mail-In columns
+                # Need Early Voting, Election Day, Mail-In columns (Provisional optional)
                 try:
                     early_i = next(i for i, h in enumerate(headers) if 'early' in h.lower())
                     ed_i    = next(i for i, h in enumerate(headers) if 'election' in h.lower() and 'day' in h.lower())
                     mail_i  = next(i for i, h in enumerate(headers) if 'mail' in h.lower())
                 except StopIteration:
                     continue
+                prov_i = next((i for i, h in enumerate(headers) if 'prov' in h.lower()), None)
 
                 # Must be a Democratic table
                 text = ' '.join(c for row in table for c in row).lower()
@@ -489,9 +492,10 @@ def scrape_county_methods():
                         continue
                     is_total = re.sub(r'\W', '', name).lower() in ('totals', 'total')
                     vals = {
-                        'early': parse_vote(row[early_i]) if early_i < len(row) else 0,
-                        'ed':    parse_vote(row[ed_i])    if ed_i    < len(row) else 0,
-                        'mail':  parse_vote(row[mail_i])  if mail_i  < len(row) else 0,
+                        'early':       parse_vote(row[early_i]) if early_i < len(row) else 0,
+                        'ed':          parse_vote(row[ed_i])    if ed_i    < len(row) else 0,
+                        'mail':        parse_vote(row[mail_i])  if mail_i  < len(row) else 0,
+                        'provisional': parse_vote(row[prov_i])  if prov_i is not None and prov_i < len(row) else 0,
                     }
                     if is_total:
                         county_method[county_name] = {**vals, 'candidates': candidates}
@@ -508,7 +512,7 @@ def scrape_county_methods():
 
             if found:
                 m = county_method[county_name]
-                log.append(f"✅ {county_name}: Early {m['early']:,} | ED {m['ed']:,} | Mail {m['mail']:,}")
+                log.append(f"✅ {county_name}: Early {m['early']:,} | ED {m['ed']:,} | Mail {m['mail']:,} | Prov {m.get('provisional',0):,}")
             else:
                 log.append(f"⚠️ {county_name}: table parse failed")
 
