@@ -183,9 +183,9 @@ def _detect_drops():
         old_cands = _prev_county.get(county, {})
         delta     = sum(cands.values()) - sum(old_cands.values())
         if delta <= 0:
-            # No vote change — advance method snapshot so future deltas are relative
-            if new_methods.get(county):
-                _prev_county_method[county] = dict(new_methods[county])
+            # No vote change — do NOT advance method snapshot here.
+            # _prev_county_method only advances when a drop is emitted, so the
+            # baseline stays at "last drop" values and the delta is always meaningful.
             continue
 
         cand_deltas  = {c: cands[c] - old_cands.get(c, 0) for c in cands
@@ -198,7 +198,7 @@ def _detect_drops():
         old_m = _prev_county_method.get(county, {})
         new_m = new_methods.get(county, {})
         method_key = None
-        if old_m and new_m:
+        if new_m:
             best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
             if new_m.get(best, 0) - old_m.get(best, 0) > 0:
                 method_key = best
@@ -730,6 +730,30 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(b'{"ok":true}')
             except:
                 self.send_response(400); self.end_headers()
+
+        elif self.path == '/patch-feed':
+            # Patch individual voteFeed entries — operator only
+            # Body: [{"index": N, "methodKey": "mail", "methodLabel": "Mail-In"}, ...]
+            pw = self.headers.get('X-Operator-Password', '')
+            if pw != OPERATOR_PASSWORD:
+                self._send_json(b'{"error":"unauthorized"}', 403)
+                return
+            try:
+                patches = json.loads(body)
+                feed = (stored_state or {}).get('voteFeed', [])
+                changed = 0
+                for p in patches:
+                    idx = p.get('index')
+                    if idx is not None and 0 <= idx < len(feed):
+                        feed[idx]['methodKey']   = p.get('methodKey')
+                        feed[idx]['methodLabel'] = p.get('methodLabel')
+                        changed += 1
+                if stored_state:
+                    stored_state['voteFeed'] = feed
+                    _save_stored_state()
+                self._send_json(json.dumps({"ok": True, "changed": changed}).encode())
+            except Exception as e:
+                self._send_json(json.dumps({"error": str(e)}).encode(), 400)
 
         else:
             self.send_response(404); self.end_headers()
