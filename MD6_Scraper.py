@@ -78,7 +78,7 @@ stored_state = None
 stored_config = {}   # persisted operator config (counties, priors, candidates)
 
 def _load_stored_state():
-    global stored_state, _prev_county_method
+    global stored_state, _prev_county_method, _unresolved_methods
     try:
         with open(STATE_FILE) as f:
             stored_state = json.load(f)
@@ -87,6 +87,9 @@ def _load_stored_state():
         if stored_state and '_prevCountyMethod' in stored_state:
             _prev_county_method = stored_state['_prevCountyMethod']
             print(f"[State] Restored method baselines for {len(_prev_county_method)} counties")
+        if stored_state and '_unresolvedMethods' in stored_state:
+            _unresolved_methods = stored_state['_unresolvedMethods']
+            print(f"[State] Restored {len(_unresolved_methods)} unresolved method drops")
     except:
         stored_state = None
 
@@ -120,16 +123,16 @@ _load_stored_state()
 
 _prev_county        = {}   # county_name -> {cand_name: votes}
 _prev_county_method = {}   # county_name -> {early, ed, mail, provisional}
-_pending_drops      = {}   # county_name -> {entry, snap_cands, snap_methods, cycles_waited}
+_unresolved_methods = {}   # county_name -> {snap, ts, cycles} — drops emitted immediately, method still being tracked
 
 APRIL_NAME    = "April McClain Delaney"
 TRONE_NAME    = "David J. Trone"
 METHOD_LABELS = {'mail': 'Mail-In', 'early': 'Early Vote', 'ed': 'Election Day', 'provisional': 'Provisional'}
-MAX_PENDING_CYCLES = 120  # wait up to 120 cycles (~10min at 5s interval) — SBOE method pages update slowly post-election
+MAX_RETROACTIVE_CYCLES = 360  # give up retroactive resolution after ~30min (360 * 5s)
 
 def _detect_drops():
-    """Diff county results vs previous scrape; append new vote drops to stored_state voteFeed."""
-    global _prev_county, _prev_county_method, _pending_drops, stored_state
+    """Diff county results vs previous scrape; emit drops immediately, resolve method retroactively."""
+    global _prev_county, _prev_county_method, _unresolved_methods, stored_state
 
     new_county  = latest.get('county', {})
     new_methods = {k: {m: v.get(m, 0) for m in ('early','ed','mail','provisional')}
@@ -141,51 +144,58 @@ def _detect_drops():
         _prev_county_method = dict(new_methods)
         return
 
-    ts   = _now_eastern("%-I:%M %p ET")
+    ts   = _now_eastern("%b %-d, %-I:%M %p ET")   # e.g. "Jul 6, 9:35 PM ET"
     feed = list((stored_state or {}).get('voteFeed', []))
 
-    # ── Try to resolve pending entries (method data may have caught up) ──
+    # ── Retroactively resolve already-emitted drops whose method wasn't known yet ──
     resolved = []
-    for county, pending in list(_pending_drops.items()):
-        # Use snap_methods as baseline; if empty (e.g. post-restart), fall back to current _prev_county_method
-        old_m = pending['snap_methods'] or _prev_county_method.get(county, {})
+    for county, unres in list(_unresolved_methods.items()):
+        snap  = unres.get('snap', {})
         new_m = new_methods.get(county, {})
+        unres['cycles'] = unres.get('cycles', 0) + 1
+
         method_key = None
         if new_m:
-            best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
-            if new_m.get(best, 0) - old_m.get(best, 0) > 0:
+            best = max(('mail','early','ed','provisional'),
+                       key=lambda m: new_m.get(m, 0) - snap.get(m, 0))
+            if new_m.get(best, 0) - snap.get(best, 0) > 0:
                 method_key = best
 
-        pending['cycles_waited'] += 1
-        if method_key or pending['cycles_waited'] >= MAX_PENDING_CYCLES:
-            # Emit with best available method (may still be None if data never updated)
-            entry = pending['entry']
-            entry['methodKey']   = method_key
-            entry['methodLabel'] = METHOD_LABELS.get(method_key) if method_key else None
-            feed = [entry] + feed
-            resolved.append(county)
-            print(f"[Drop] {county} +{entry['delta']:,} ({method_key or '?'}) — "
-                  f"April +{entry['candDeltas'].get(APRIL_NAME,0)}, "
-                  f"Trone +{entry['candDeltas'].get(TRONE_NAME,0)}"
-                  + ('' if method_key else ' [method unknown]'))
-            # Advance method snapshot now that we've published
-            if new_m:
+        if method_key or unres['cycles'] >= MAX_RETROACTIVE_CYCLES:
+            if method_key:
+                # Find the matching feed entry and update it in-place
+                drop_ts = unres.get('ts')
+                for i, entry in enumerate(feed):
+                    if (entry.get('county') == county and entry.get('ts') == drop_ts
+                            and entry.get('methodKey') is None):
+                        feed[i]['methodKey']   = method_key
+                        feed[i]['methodLabel'] = METHOD_LABELS.get(method_key)
+                        print(f"[Retroactive] {county} @ {drop_ts} → {method_key}")
+                        break
                 _prev_county_method[county] = dict(new_m)
+            else:
+                # Timed out — advance baseline to current so future drops aren't confused
+                if new_m:
+                    _prev_county_method[county] = dict(new_m)
+                print(f"[Retroactive] {county} — gave up after {unres['cycles']} cycles, method unknown")
+            resolved.append(county)
 
     for county in resolved:
-        del _pending_drops[county]
+        del _unresolved_methods[county]
 
     # ── Check for new vote deltas ──
     for county, cands in new_county.items():
-        if county in _pending_drops:
-            continue  # already waiting on a pending drop for this county
+        if county in _unresolved_methods:
+            # Previous drop still awaiting method resolution — skip to avoid double-counting.
+            # (Drops are hours apart post-election so this is rarely an issue.)
+            continue
 
         old_cands = _prev_county.get(county, {})
         delta     = sum(cands.values()) - sum(old_cands.values())
         if delta <= 0:
             # No vote change — do NOT advance method snapshot here.
-            # _prev_county_method only advances when a drop is emitted, so the
-            # baseline stays at "last drop" values and the delta is always meaningful.
+            # _prev_county_method only advances when method is resolved, so the
+            # baseline stays at "last resolved drop" values and deltas stay meaningful.
             continue
 
         cand_deltas  = {c: cands[c] - old_cands.get(c, 0) for c in cands
@@ -194,12 +204,13 @@ def _detect_drops():
         trone_delta  = cand_deltas.get(TRONE_NAME, 0)
         margin_delta = april_delta - trone_delta
 
-        # Try to resolve method now
+        # Try to resolve method immediately
         old_m = _prev_county_method.get(county, {})
         new_m = new_methods.get(county, {})
         method_key = None
         if new_m:
-            best = max(('mail','early','ed','provisional'), key=lambda m: new_m.get(m,0) - old_m.get(m,0))
+            best = max(('mail','early','ed','provisional'),
+                       key=lambda m: new_m.get(m, 0) - old_m.get(m, 0))
             if new_m.get(best, 0) - old_m.get(best, 0) > 0:
                 method_key = best
 
@@ -213,34 +224,35 @@ def _detect_drops():
             'methodLabel': METHOD_LABELS.get(method_key) if method_key else None,
         }
 
+        # Always emit immediately so the card appears on the dashboard right away
+        feed = [entry] + feed
+        print(f"[Drop] {county} +{delta:,} ({method_key or 'method pending retroactive'}) — "
+              f"April +{april_delta}, Trone +{trone_delta}")
+
         if method_key:
-            # Method resolved immediately — emit now
-            feed = [entry] + feed
-            print(f"[Drop] {county} +{delta:,} ({method_key}) — "
-                  f"April +{april_delta}, Trone +{trone_delta}")
+            # Method resolved immediately — advance baseline now
             if new_m:
                 _prev_county_method[county] = dict(new_m)
         else:
-            # Method unclear — hold for up to MAX_PENDING_CYCLES cycles
-            print(f"[Drop] {county} +{delta:,} (pending method) — "
-                  f"April +{april_delta}, Trone +{trone_delta}")
-            _pending_drops[county] = {
-                'entry':         entry,
-                'snap_methods':  dict(old_m) if old_m else {},
-                'cycles_waited': 0,
+            # Method unknown — track for retroactive resolution; do NOT advance baseline yet
+            _unresolved_methods[county] = {
+                'snap':   dict(old_m) if old_m else {},
+                'ts':     ts,
+                'cycles': 0,
             }
 
-        # Always advance vote snapshot so we don't re-detect the same delta
+        # Always advance vote snapshot so we don't re-detect the same delta next cycle
         _prev_county[county] = dict(cands)
 
     if stored_state is None:
         stored_state = {}
-    stored_state['voteFeed'] = feed[:50]
-    stored_state['_prevCountyMethod'] = _prev_county_method  # persist so restarts don't lose baselines
+    stored_state['voteFeed']           = feed[:50]
+    stored_state['_prevCountyMethod']  = _prev_county_method
+    stored_state['_unresolvedMethods'] = _unresolved_methods
     _save_stored_state()
 
-    _prev_county        = {k: dict(v) for k, v in new_county.items()}
-    # Note: _prev_county_method is updated per-county above; don't overwrite here
+    _prev_county = {k: dict(v) for k, v in new_county.items()}
+    # Note: _prev_county_method is updated per-county above; don't bulk-overwrite here
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -691,7 +703,8 @@ class Handler(BaseHTTPRequestHandler):
             info['countyMethod'] = latest.get('countyMethod', {})
             info['districtMethod'] = latest.get('method', {})
             info['prevCountyMethod'] = _prev_county_method
-            info['pendingDrops'] = list(_pending_drops.keys())
+            info['unresolvedMethods'] = {k: {'ts': v.get('ts'), 'cycles': v.get('cycles', 0)}
+                                         for k, v in _unresolved_methods.items()}
             self._send_json(json.dumps(info, indent=2).encode())
         else:
             # Default: live scraper data
