@@ -125,7 +125,7 @@ _pending_drops      = {}   # county_name -> {entry, snap_cands, snap_methods, cy
 APRIL_NAME    = "April McClain Delaney"
 TRONE_NAME    = "David J. Trone"
 METHOD_LABELS = {'mail': 'Mail-In', 'early': 'Early Vote', 'ed': 'Election Day', 'provisional': 'Provisional'}
-MAX_PENDING_CYCLES = 6   # wait up to 6 cycles (~30s at 5s interval) for method data to catch up
+MAX_PENDING_CYCLES = 120  # wait up to 120 cycles (~10min at 5s interval) — SBOE method pages update slowly post-election
 
 def _detect_drops():
     """Diff county results vs previous scrape; append new vote drops to stored_state voteFeed."""
